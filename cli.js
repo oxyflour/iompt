@@ -11,7 +11,7 @@ const net = require('net'),
 
 program
   .version(packageJson)
-  .option('-P, --peer <[count*]url>', 'iompt server url, required as client', (r, p) => p.concat(r), [ ])
+  .option('-P, --peer <[concurrency*]url>', 'iompt server url, required as client', (r, p) => p.concat(r), [ ])
   .option('-F, --forward <[host:]port:remoteHost:remotePort>', 'forward host:port to remoteHost:remotePort, required as client', (r, p) => p.concat(r), [ ])
   .option('-l, --listen <[host:]port>', 'listen port, required as server', (r, p) => p.concat(r), [ ])
   .parse(process.argv)
@@ -28,7 +28,7 @@ if (program.peer.length && program.forward.length) {
     }
 
     Array(concurrency).fill(0).forEach((_, j) => {
-      const peer = ioClient(url, { agent: new require('http-proxy-agent')('http://h.ofr.me:8888') }),
+      const peer = ioClient(url),
         id = i + '#' + j
       peer.on('connect', evt => {
         console.log('[C] connected to ' + url)
