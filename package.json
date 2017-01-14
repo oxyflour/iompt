@@ -1,0 +1,20 @@
+{
+  "name": "iompt",
+  "version": "0.0.1",
+  "description": "multiple path tunnel with socket.io",
+  "main": "index.js",
+  "bin": {
+    "iompt": "cli.js"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "oxyflour <oxyflour@hotmail.com>",
+  "license": "MIT",
+  "dependencies": {
+    "commander": "^2.9.0",
+    "debug": "^2.6.0",
+    "socket.io": "^1.7.2",
+    "socket.io-client": "^1.7.2"
+  }
+}
