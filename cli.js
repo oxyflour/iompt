@@ -46,9 +46,6 @@ if (program.peer.length && program.forward.length) {
       peer.on('conn-data', evt => {
         pool.has(evt.id) && pool.open(evt.id).recv(evt.index, evt.data, peer)
       })
-      peer.on('conn-close', evt => {
-        pool.destroy(evt.id)
-      })
     })
   })
 
@@ -92,9 +89,6 @@ if (program.listen.length) {
       })
       peer.on('conn-data', evt => {
         pool.has(evt.id) && pool.open(evt.id).recv(evt.index, evt.data, peer)
-      })
-      peer.on('conn-close', evt => {
-        pool.destroy(evt.id)
       })
     })
 
