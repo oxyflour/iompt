@@ -13,8 +13,19 @@ function throttle(fn, interval) {
   }
 }
 
-function createConn(id, sock) {
-  const log = debug('c:' + id + '')
+function debounce(fn, delay) {
+  let timeout = 0
+  return function() {
+    timeout && clearTimeout(timeout)
+    timeout = setTimeout(_ => {
+      timeout = 0
+      fn.apply(this, arguments)
+    }, delay)
+  }
+}
+
+function createConn(id, sock, opts) {
+  const log = debug('iompt:' + id + '')
   log('init')
 
   if (typeof sock.on !== 'function') {
@@ -40,49 +51,66 @@ function createConn(id, sock) {
     peers.splice(peers.indexOf(peer), 1)
   }
 
+  const bufferSizeOf = peer => peer.client && peer.client.conn.writeBuffer.length || 0
   function select() {
-    return peers
-      .map(peer => [peer, peer.client && peer.client.conn.writeBuffer.length || 0])
-      .filter(data => data[1] >= 0)
-      .sort((a, b) => a[1] - b[1])
-      .map(data => data[0])[0]
+    return peers.sort((a, b) => bufferSizeOf(a) - bufferSizeOf(b))[0]
   }
 
-  let sockPaused = false
+  let isPaused = false
   const throttlePause = throttle(() => {
-    const sizes = peers
-        .map(peer => peer.client && peer.client.conn.writeBuffer.length || 0),
-      sz = sizes.length ? sizes : [0],
-      min = Math.min.apply(Math, sz),
-      max = Math.max.apply(Math, sz)
-    if (min > 20 && !sockPaused) {
-      sockPaused = true
+    const sizes = peers.length ? peers.map(bufferSizeOf) : [0],
+      min = Math.min.apply(Math, sizes),
+      max = Math.max.apply(Math, sizes)
+    if (min > opts.sockPauseBufferSize && !isPaused) {
+      isPaused = true
       sock.pause()
       log('pause (min %d)', min)
     }
-    else if (max < 10 && sockPaused) {
-      sockPaused = false
+    else if (max < opts.sockResumeBufferSize && isPaused) {
+      isPaused = false
       sock.resume()
       log('resume (max %d)', max)
     }
-    if (sockPaused) {
+    if (isPaused) {
       throttlePause()
     }
-  }, 20)
+  }, opts.sockThrottleInterval)
 
   const ioBuffer = [ ]
+  let ioBufStart = 0
   const throttleFlush = throttle(() => {
-    let start = 0, peer = select()
-    for (; start < ioBuffer.length && peer; start ++) {
+    let peer = select()
+    for (; ioBufStart < ioBuffer.length && peer; ioBufStart ++) {
       const peerId = peer.usedPeerId = peer.usedPeerId || Math.random()
       peerSentCount[peerId] = (peerSentCount[peerId] || 0) + 1
 
-      const buf = ioBuffer[start]
+      const buf = ioBuffer[ioBufStart]
       peer.emit('conn-data', buf)
       peer = select()
     }
-    ioBuffer.splice(0, start)
-  }, 30)
+
+    if (ioBuffer.length > opts.ioMaxBufferSize) {
+      const delta = opts.ioMaxBufferSize - opts.ioMinBufferSize
+      ioBuffer.splice(0, delta)
+      ioBufStart -= delta
+    }
+  }, opts.ioFlushInterval)
+
+  function rescue(index) {
+    const buf = ioBuffer.find(buf => buf.index === index),
+      peer = buf && select()
+    if (buf && peer) {
+      log('rescue ' + index)
+      peer.emit('conn-data', buf)
+    }
+    else {
+      const indices = ioBuffer.map(buf => buf.index),
+        start = indices[0], end = indices[indices.length - 1]
+      if (ioBuffer.length && index < indices[0]) {
+        log('can not rescue ' + index + ' (' + start + ' ~ ' + end + ')')
+      }
+    }
+  }
 
   let ioBufIndex = 0
   function emit(data) {
@@ -91,6 +119,15 @@ function createConn(id, sock) {
     throttleFlush()
     throttlePause()
   }
+
+  const debounceRequest = debounce(() => {
+    const peer = select()
+    if (peer && !isDestroyed) {
+      log('request ' + netBufIndex)
+      const index = netBufIndex
+      peer.emit('conn-request', { id, index })
+    }
+  }, 3000)
 
   const netBuffer = { }
   let netBufIndex = 0
@@ -105,12 +142,16 @@ function createConn(id, sock) {
       if (buf.length) {
         sock.write(buf)
         netSentBytes += buf.length
+        delete netBuffer[netBufIndex ++]
       }
       else {
         destroy()
         break
       }
-      delete netBuffer[netBufIndex ++]
+    }
+
+    if (!isDestroyed) {
+      debounceRequest()
     }
   }
 
@@ -143,26 +184,29 @@ function createConn(id, sock) {
     add,
     remove,
     recv,
+    rescue,
     destroy,
     get lastActive() { return lastActive },
     get isDestroyed() { return isDestroyed },
+    get isPaused() { return isPaused },
   }
 }
 
 function createPool(opts) {
-  const log = debug('c:POOL')
+  const log = debug('iompt:POOL')
   log('init')
 
   const conns = { }
 
   function check() {
-    const lastActive = Date.now() - (opts && opts.activeTimeout || 30 * 1000)
+    const lastActive = Date.now() - opts.idleTimeout * 1000
     Object.keys(conns).forEach(id => {
       const conn = conns[id]
       if (conn.isDestroyed || conn.lastActive < lastActive) {
+        const reason = conn.isDestroyed ? 'close' : 'timeout'
         conn.destroy()
         delete conns[id]
-        log('close %s (%d left)', id, Object.keys(conns).length)
+        log(reason + ' %s (%d left)', id, Object.keys(conns).length)
       }
     })
   }
@@ -173,7 +217,7 @@ function createPool(opts) {
 
   function open(id, sock) {
     if (!conns[id]) {
-      conns[id] = createConn(id, sock)
+      conns[id] = createConn(id, sock, opts)
       log('open %s (%d total)', id, Object.keys(conns).length)
     }
     return conns[id]
@@ -187,6 +231,9 @@ function createPool(opts) {
       remove(peer) {
         Object.keys(conns).forEach(id => conns[id].remove(peer))
       },
+      forEach(fn) {
+        Object.keys(conns).forEach(id => fn(id, conns[id]))
+      }
     }
   }
 
