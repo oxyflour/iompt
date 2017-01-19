@@ -45,6 +45,7 @@ function createConn(id, sock, opts) {
     if (peers.indexOf(peer) === -1) {
       peers.push(peer)
     }
+    return peer
   }
 
   function remove(peer) {
@@ -53,7 +54,8 @@ function createConn(id, sock, opts) {
 
   const bufferSizeOf = peer => peer.client && peer.client.conn.writeBuffer.length || 0
   function select() {
-    return peers.sort((a, b) => bufferSizeOf(a) - bufferSizeOf(b))[0]
+    peers.forEach(peer => peer.selectOrder = (bufferSizeOf(peer) + 1 + Math.random() * 0.1) * (peer.averagePing || 1000))
+    return peers.sort((a, b) => a.selectOrder - b.selectOrder)[0]
   }
 
   let isPaused = false
@@ -104,9 +106,9 @@ function createConn(id, sock, opts) {
       peer.emit('conn-data', buf)
     }
     else {
-      const indices = ioBuffer.map(buf => buf.index),
-        start = indices[0], end = indices[indices.length - 1]
-      if (ioBuffer.length && index < indices[0]) {
+      const indices = ioBuffer.map(buf => buf.index)
+      if (index < indices[0]) {
+        const start = indices[0], end = indices[indices.length - 1]
         log('can not rescue ' + index + ' (' + start + ' ~ ' + end + ')')
       }
     }
@@ -223,18 +225,8 @@ function createPool(opts) {
     return conns[id]
   }
 
-  function all() {
-    return {
-      add(peer) {
-        Object.keys(conns).forEach(id => conns[id].add(peer))
-      },
-      remove(peer) {
-        Object.keys(conns).forEach(id => conns[id].remove(peer))
-      },
-      forEach(fn) {
-        Object.keys(conns).forEach(id => fn(id, conns[id]))
-      }
-    }
+  function eachConn(fn) {
+    Object.keys(conns).forEach(id => fn(conns[id], id))
   }
 
   setInterval(check, 5000)
@@ -242,7 +234,7 @@ function createPool(opts) {
   return {
     has,
     open,
-    all,
+    eachConn,
   }
 }
 
