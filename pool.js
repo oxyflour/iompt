@@ -58,26 +58,6 @@ function createConn(id, sock, opts) {
     return peers.sort((a, b) => a.selectOrder - b.selectOrder)[0]
   }
 
-  let isPaused = false
-  const throttlePause = throttle(() => {
-    const sizes = peers.length ? peers.map(bufferSizeOf) : [0],
-      min = Math.min.apply(Math, sizes),
-      max = Math.max.apply(Math, sizes)
-    if (min > opts.sockPauseBufferSize && !isPaused) {
-      isPaused = true
-      sock.pause()
-      log('pause (min %d)', min)
-    }
-    else if (max < opts.sockResumeBufferSize && isPaused) {
-      isPaused = false
-      sock.resume()
-      log('resume (max %d)', max)
-    }
-    if (isPaused) {
-      throttlePause()
-    }
-  }, opts.sockThrottleInterval)
-
   const ioBuffer = [ ]
   let ioBufStart = 0
   const throttleFlush = throttle(() => {
@@ -114,19 +94,34 @@ function createConn(id, sock, opts) {
     }
   }
 
+  let isPaused = false
+  function checkAcknowledge() {
+    if (!(ioBufIndex < ioMaxAckIndex + opts.sockMaxAcknowledgeOffset) && !isPaused) {
+      log('paused at ' + ioBufIndex)
+      isPaused = true
+      sock.pause()
+    }
+  }
+
   let ioBufIndex = 0
   function emit(data) {
     const index = ioBufIndex ++
     ioBuffer.push({ id, index, data })
     throttleFlush()
-    throttlePause()
+    checkAcknowledge()
   }
 
-  const debounceRequest = debounce(() => {
+  function sendAcknowledge(index) {
+    const peer = select()
+    if (peer && !isDestroyed) {
+      peer.emit('conn-ack', { id, index })
+    }
+  }
+
+  const debounceRequest = debounce((index) => {
     const peer = select()
     if (peer && !isDestroyed) {
       log('request ' + netBufIndex)
-      const index = netBufIndex
       peer.emit('conn-request', { id, index })
     }
   }, 3000)
@@ -145,15 +140,25 @@ function createConn(id, sock, opts) {
         sock.write(buf)
         netSentBytes += buf.length
         delete netBuffer[netBufIndex ++]
+        debounceRequest(netBufIndex)
+        if (netBufIndex % opts.sockAcknowledgeInterval === 0) {
+          sendAcknowledge(netBufIndex)
+        }
       }
       else {
         destroy()
         break
       }
     }
+  }
 
-    if (!isDestroyed) {
-      debounceRequest()
+  let ioMaxAckIndex = 0
+  function acknowledge(index) {
+    ioMaxAckIndex = Math.max(index, ioMaxAckIndex)
+    if (ioBufIndex < ioMaxAckIndex + opts.sockMaxAcknowledgeOffset && isPaused) {
+      log('resumed at ' + ioBufIndex)
+      isPaused = false
+      sock.resume()
     }
   }
 
@@ -187,10 +192,10 @@ function createConn(id, sock, opts) {
     remove,
     recv,
     rescue,
+    acknowledge,
     destroy,
     get lastActive() { return lastActive },
     get isDestroyed() { return isDestroyed },
-    get isPaused() { return isPaused },
   }
 }
 

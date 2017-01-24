@@ -20,9 +20,8 @@ program
   .option('--io-flush-interval <integer>', 'milliseconds to flush data, default 30ms', parseFloat, 30)
   .option('--io-max-buffer-size <integer>', 'default 40', parseFloat, 40)
   .option('--io-min-buffer-size <integer>', 'default 30', parseFloat, 30)
-  .option('--sock-throttle-interval <integer>', 'milliseconds to pause/resume socket stream, default 20ms', parseFloat, 20)
-  .option('--sock-resume-buffer-size <integer>', 'default 10', parseFloat, 10)
-  .option('--sock-pause-buffer-size <integer>', 'default 20', parseFloat, 20)
+  .option('--sock-acknowledge-interval <integer>', 'send acknowledge message to another side every * packages, default 4', parseFloat, 4)
+  .option('--sock-max-acknowledge-offset <integer>', 'pause socket until last message received, default 32', parseFloat, 64)
   .parse(process.argv)
 
 if (program.peer.length && program.forward.length) {
@@ -66,6 +65,9 @@ if (program.peer.length && program.forward.length) {
       })
       peer.on('conn-request', evt => {
         pool.has(evt.id) && pool.open(evt.id).rescue(evt.index)
+      })
+      peer.on('conn-ack', evt => {
+        pool.has(evt.id) && pool.open(evt.id).acknowledge(evt.index)
       })
     })
   })
@@ -130,6 +132,9 @@ if (program.listen.length) {
       })
       peer.on('conn-request', evt => {
         pool.has(evt.id) && pool.open(evt.id).rescue(evt.index)
+      })
+      peer.on('conn-ack', evt => {
+        pool.has(evt.id) && pool.open(evt.id).acknowledge(evt.index)
       })
     })
 
